@@ -1,0 +1,125 @@
+include:
+  - component: $CI_SERVER_FQDN/components/code-quality-oss/codequality-os-scanners-integration/pmd@1.1.1
+    inputs:
+      stage: analyze
+
+
+stages:
+  - build
+  - test
+  - analyze
+  - package
+  - deploy
+
+image: maven:3.9.7-eclipse-temurin-21
+
+variables:
+  maven_packages_cache: ".m2/repository"
+  MAVEN_OPTS: "-Dmaven.repo.local=./$maven_packages_cache"
+  sonar_project: "ConnectFour"
+
+build:
+  stage: build
+  only:
+    refs:
+      - main
+  tags:
+    - docker
+  cache:
+    paths:
+      - $maven_packages_cache
+  artifacts:
+    name: $CI_JOB_NAME-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
+    expire_in: 1 week
+    paths:
+      - "target/*"
+  script:
+    - mvn compile
+
+test:
+  stage: test
+  only:
+    refs:
+      - main
+  tags:
+    - docker
+  dependencies:
+    - build
+  cache:
+    paths:
+      - $maven_packages_cache
+  artifacts:
+    name: $CI_JOB_NAME-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
+    expire_in: 1 week
+    paths:
+      - "target/surefire-reports/*"
+      - "target/site/jacoco/*"
+  script:
+    - mvn test
+
+sonar:
+  stage: analyze
+  only:
+    refs:
+      - main
+  tags:
+    - docker
+  dependencies:
+    - build
+    - test
+  cache:
+    paths:
+      - $maven_packages_cache
+  script:
+    - mvn sonar:sonar -Dsonar.projectKey=$sonar_project -Dsonar.qualitygate.wait=true
+  allow_failure: true
+
+package:
+  stage: package
+  only:
+    refs:
+      - main
+  tags:
+    - docker
+  dependencies:
+    - test
+  cache:
+    paths:
+      - $maven_packages_cache
+  artifacts:
+    name: $CI_JOB_NAME-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
+    expire_in: 1 week
+    paths:
+      - "target/*.war"
+  script:
+    - mvn package
+
+deploy_test:
+  stage: deploy
+  tags:
+    - shell
+  dependencies:
+    - package
+  environment:
+    name: test
+    action: start
+    url: http://localhost:8080/ConnectFour
+    on_stop: stop_test
+  when: manual
+  script:
+    - docker rm -f tomcat
+    - docker image rm -f connect-four
+    - docker build -t connect-four .
+    - docker run --rm -d --name tomcat -p 8080:8080 connect-four
+
+stop_test:
+  stage: deploy
+  tags:
+    - shell
+  environment:
+    name: test
+    action: stop
+  when: manual
+  script:
+    - docker rm -f tomcat
+    - docker image rm -f connect-four

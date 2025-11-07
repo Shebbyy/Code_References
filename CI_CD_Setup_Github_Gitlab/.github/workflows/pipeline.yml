@@ -1,0 +1,97 @@
+name: SPW4 Test Runner Demo
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  maven_packages_cache: ".m2"
+  MAVEN_OPTS: "-Dmaven.repo.local=./.m2"
+  sonar_project: "ConnectFour_Github"
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with Maven
+        run: mvn compile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-artifact
+          path: target
+      - uses: actions/cache@v4
+        with:
+          path: $maven_packages_cache
+          key: build-cache-${{ github.run_id }}
+          restore-keys: build-cache-
+
+  test:
+    needs: build
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: $maven_packages_cache
+          key: build-cache-${{ github.run_id }}
+          restore-keys: build-cache-
+      - name: Test with Maven
+        run: mvn test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-artifact
+          path: target/site/jacoco
+
+  analyze:
+    needs: test
+    runs-on: self-hosted
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: $maven_packages_cache
+          key: build-cache-${{ github.run_id }}
+          restore-keys: build-cache-
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: build-artifact
+          path: ./target
+      - name: Analyze Code using Sonar
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: mvn sonar:sonar -Dsonar.projectKey=$sonar_project -Dsonar.qualitygate.wait=true
+
+  package:
+    needs: analyze
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: $maven_packages_cache
+          key: build-cache-${{ github.run_id }}
+          restore-keys: build-cache-
+      - name: Packaging ConnectFour Project using Maven
+        run: mvn package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-artifact
+          path: target/*.war
+
+  deploy_test:
+    needs: package
+    runs-on: self-hosted
+    environment:
+      name: test
+      url: http://localhost:8080/ConnectFour
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: package-artifact
+      - name: Move to webapp folder
+        run: mv /home/github-runner/actions-runner/_work/spw4_github_runner_testing/spw4_github_runner_testing/ConnectFour.war /usr/local/tomcat/webapps
